@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import re
 import uuid
 from datetime import datetime, timezone
@@ -11,17 +12,18 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import current_merchant
+from app.api.deps import current_merchant, get_registry
 from app.config import Settings, get_settings
 from app.db import get_session
 from app.errors import ApiError
 from app.models import Account, ApiKey, Merchant, WebhookDelivery, WebhookEndpoint
 from app.netsafety import UnsafeUrl, check_public_url
 from app.ratelimit import RateLimiter, client_ip
-from app.security import create_access_token, new_webhook_secret, verify_password
+from app.security import create_access_token, derive_api_key, hash_api_key, new_webhook_secret, verify_password
 from app.services import merchants as merchant_service
 from app.services.serializers import iso, tx_to_dict
-from app.services.transactions import list_transactions
+from app.providers.registry import ProviderRegistry
+from app.services.transactions import list_transactions, refresh_many
 from app.services.webhooks_out import EVENT_TYPES
 
 router = APIRouter(tags=["dashboard"])
@@ -110,37 +112,63 @@ async def my_transactions(
     offset: int = Query(0, ge=0),
     merchant: Merchant = Depends(current_merchant),
     session: AsyncSession = Depends(get_session),
+    registry: ProviderRegistry = Depends(get_registry),
 ):
     rows = await list_transactions(session, merchant.id, mode, type_=type, status=status, limit=limit, offset=offset)
+    await refresh_many(session, registry, rows)
     return {"data": [tx_to_dict(tx) for tx in rows], "limit": limit, "offset": offset}
 
 
 # ------------------------------------------------------------------ API keys
-def _key_to_dict(k: ApiKey) -> dict:
-    return {"id": str(k.id), "mode": k.mode, "label": k.label, "prefix": k.prefix, "last_used_at": iso(k.last_used_at), "revoked_at": iso(k.revoked_at), "created_at": iso(k.created_at)}
+def _derived_secret(k: ApiKey, secret: str) -> str | None:
+    """The key's full secret if it can be re-derived (keys created with the revealable scheme), else None."""
+    if not secret:
+        return None
+    full = derive_api_key(k.mode, k.id, secret)
+    return full if hmac.compare_digest(hash_api_key(full), k.key_hash) else None
+
+
+def _key_to_dict(k: ApiKey, settings: Settings) -> dict:
+    return {
+        "id": str(k.id), "mode": k.mode, "label": k.label, "prefix": k.prefix,
+        "revealable": k.revoked_at is None and _derived_secret(k, settings.key_secret) is not None,
+        "last_used_at": iso(k.last_used_at), "revoked_at": iso(k.revoked_at), "created_at": iso(k.created_at),
+    }
 
 
 @router.post("/me/api-keys", status_code=201)
-async def create_api_key(body: ApiKeyIn, merchant: Merchant = Depends(current_merchant), session: AsyncSession = Depends(get_session)):
-    key, secret = await merchant_service.issue_api_key(session, merchant, body.mode, body.label)
-    return {**_key_to_dict(key), "secret": secret, "note": "Store this secret now: it cannot be shown again."}
+async def create_api_key(body: ApiKeyIn, merchant: Merchant = Depends(current_merchant), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
+    key, secret = await merchant_service.issue_api_key(session, merchant, body.mode, body.label, settings.key_secret)
+    return {**_key_to_dict(key, settings), "secret": secret}
 
 
 @router.get("/me/api-keys")
-async def list_api_keys(merchant: Merchant = Depends(current_merchant), session: AsyncSession = Depends(get_session)):
+async def list_api_keys(merchant: Merchant = Depends(current_merchant), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
     keys = (await session.execute(select(ApiKey).where(ApiKey.merchant_id == merchant.id).order_by(ApiKey.created_at.desc()))).scalars().all()
-    return {"data": [_key_to_dict(k) for k in keys]}
+    return {"data": [_key_to_dict(k, settings) for k in keys]}
+
+
+@router.get("/me/api-keys/{key_id}/secret")
+async def reveal_api_key(key_id: uuid.UUID, merchant: Merchant = Depends(current_merchant), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
+    """Show/hide toggle backend: returns the full secret of a key (test or live) at any time."""
+    key = (await session.execute(select(ApiKey).where(ApiKey.id == key_id, ApiKey.merchant_id == merchant.id))).scalar_one_or_none()
+    if key is None or key.revoked_at is not None:
+        raise ApiError(404, "not_found", "API key not found or revoked.")
+    full = _derived_secret(key, settings.key_secret)
+    if full is None:
+        raise ApiError(409, "not_revealable", "This key cannot be revealed (created before reveal support, or API_KEY_SECRET changed). Create a new key.")
+    return {"id": str(key.id), "mode": key.mode, "secret": full}
 
 
 @router.delete("/me/api-keys/{key_id}")
-async def revoke_api_key(key_id: uuid.UUID, merchant: Merchant = Depends(current_merchant), session: AsyncSession = Depends(get_session)):
+async def revoke_api_key(key_id: uuid.UUID, merchant: Merchant = Depends(current_merchant), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
     key = (await session.execute(select(ApiKey).where(ApiKey.id == key_id, ApiKey.merchant_id == merchant.id))).scalar_one_or_none()
     if key is None:
         raise ApiError(404, "not_found", "API key not found.")
     if key.revoked_at is None:
         key.revoked_at = datetime.now(timezone.utc)
         await session.commit()
-    return _key_to_dict(key)
+    return _key_to_dict(key, settings)
 
 
 # ------------------------------------------------------------------ webhook endpoints
@@ -148,7 +176,6 @@ def _endpoint_to_dict(e: WebhookEndpoint, *, with_secret: bool = False) -> dict:
     data = {"id": str(e.id), "mode": e.mode, "url": e.url, "events": e.events or [], "is_active": e.is_active, "created_at": iso(e.created_at)}
     if with_secret:
         data["signing_secret"] = e.signing_secret
-        data["note"] = "Store the signing secret now: it is only shown at creation."
     return data
 
 
@@ -170,15 +197,23 @@ async def create_webhook_endpoint(body: WebhookEndpointIn, merchant: Merchant = 
     return _endpoint_to_dict(endpoint, with_secret=True)
 
 
+@router.get("/me/webhook-endpoints/{endpoint_id}/secret")
+async def reveal_webhook_secret(endpoint_id: uuid.UUID, merchant: Merchant = Depends(current_merchant), session: AsyncSession = Depends(get_session)):
+    endpoint = (await session.execute(select(WebhookEndpoint).where(WebhookEndpoint.id == endpoint_id, WebhookEndpoint.merchant_id == merchant.id, WebhookEndpoint.style == "paysawa"))).scalar_one_or_none()
+    if endpoint is None:
+        raise ApiError(404, "not_found", "Webhook endpoint not found.")
+    return {"id": str(endpoint.id), "signing_secret": endpoint.signing_secret}
+
+
 @router.get("/me/webhook-endpoints")
 async def list_webhook_endpoints(merchant: Merchant = Depends(current_merchant), session: AsyncSession = Depends(get_session)):
-    rows = (await session.execute(select(WebhookEndpoint).where(WebhookEndpoint.merchant_id == merchant.id).order_by(WebhookEndpoint.created_at.desc()))).scalars().all()
+    rows = (await session.execute(select(WebhookEndpoint).where(WebhookEndpoint.merchant_id == merchant.id, WebhookEndpoint.style == "paysawa").order_by(WebhookEndpoint.created_at.desc()))).scalars().all()
     return {"data": [_endpoint_to_dict(e) for e in rows]}
 
 
 @router.delete("/me/webhook-endpoints/{endpoint_id}")
 async def delete_webhook_endpoint(endpoint_id: uuid.UUID, merchant: Merchant = Depends(current_merchant), session: AsyncSession = Depends(get_session)):
-    endpoint = (await session.execute(select(WebhookEndpoint).where(WebhookEndpoint.id == endpoint_id, WebhookEndpoint.merchant_id == merchant.id))).scalar_one_or_none()
+    endpoint = (await session.execute(select(WebhookEndpoint).where(WebhookEndpoint.id == endpoint_id, WebhookEndpoint.merchant_id == merchant.id, WebhookEndpoint.style == "paysawa"))).scalar_one_or_none()
     if endpoint is None:
         raise ApiError(404, "not_found", "Webhook endpoint not found.")
     await session.delete(endpoint)

@@ -71,6 +71,21 @@ def generate_api_key(mode: str) -> tuple[str, str, str]:
     return full, full[:KEY_PREFIX_LEN], hash_api_key(full)
 
 
+def derive_api_key(mode: str, key_id: uuid.UUID, secret: str) -> str:
+    """Deterministic secret for a key id: lets the dashboard/CLI reveal it again at any time without
+    storing it. The database only holds its sha256, so a database leak alone exposes no key."""
+    mac = hmac.new(secret.encode(), f"paysawa-api-key:{mode}:{key_id}".encode(), hashlib.sha256).digest()
+    return f"sk_{mode}_{_b64(mac)}"
+
+
+def make_api_key(mode: str, key_id: uuid.UUID, secret: str) -> tuple[str, str, str]:
+    """Returns (full_secret, prefix, sha256_hash) for a revealable key."""
+    if mode not in ("test", "live"):
+        raise ValueError("mode must be test or live")
+    full = derive_api_key(mode, key_id, secret)
+    return full, full[:KEY_PREFIX_LEN], hash_api_key(full)
+
+
 def hash_api_key(full: str) -> str:
     return hashlib.sha256(full.encode()).hexdigest()
 
@@ -78,6 +93,40 @@ def hash_api_key(full: str) -> str:
 # ---------------------------------------------------------------- ids and secrets
 def new_public_id(prefix: str) -> str:
     return f"{prefix}_{secrets.token_hex(10)}"
+
+
+def new_app_username() -> str:
+    return "pa_" + secrets.token_hex(8)
+
+
+def derive_app_password(app_id: uuid.UUID, secret: str) -> str:
+    """Revealable like API keys: derived from a server secret, only its sha256 is stored."""
+    mac = hmac.new(secret.encode(), f"paysawa-app-password:{app_id}".encode(), hashlib.sha256).digest()
+    return _b64(mac)
+
+
+def derive_app_webhook_key(app_id: uuid.UUID, secret: str) -> str:
+    """Key that signs Campay-style webhooks (JWT HS256). Never stored: always re-derived."""
+    mac = hmac.new(secret.encode(), f"paysawa-app-webhook:{app_id}".encode(), hashlib.sha256).digest()
+    return "whk_" + _b64(mac)
+
+
+def create_app_token(app_id: uuid.UUID, secret: str, ttl_seconds: int = 3600) -> str:
+    now = datetime.now(timezone.utc)
+    return jwt.encode({"sub": str(app_id), "typ": "app", "iat": now, "exp": now + timedelta(seconds=ttl_seconds)}, secret, algorithm="HS256")
+
+
+def decode_app_token(token: str, secret: str) -> uuid.UUID:
+    payload = jwt.decode(token, secret, algorithms=["HS256"])
+    if payload.get("typ") != "app":
+        raise ValueError("wrong token type")
+    return uuid.UUID(payload["sub"])
+
+
+def sign_callback(webhook_key: str, params: dict, ttl_seconds: int = 3600) -> str:
+    """The `signature` query parameter of a Campay-style webhook: a JWT (HS256) over the other parameters."""
+    now = datetime.now(timezone.utc)
+    return jwt.encode({**params, "iat": now, "exp": now + timedelta(seconds=ttl_seconds)}, webhook_key, algorithm="HS256")
 
 
 def new_webhook_secret() -> str:

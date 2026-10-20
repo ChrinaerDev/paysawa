@@ -10,9 +10,10 @@ class Settings(BaseSettings):
 
     database_url: str = ""
     jwt_secret: str = ""
+    api_key_secret: str = ""  # derives revealable API keys; falls back to JWT_SECRET. Never change it once keys exist.
     internal_tick_secret: str = ""
     app_base_url: str = "http://localhost:8000"      # public URL of this API (used for webhook URL docs)
-    pay_gate_url: str = "http://localhost:3000/pay"  # hosted pay page; session url = {pay_gate_url}/{session_id}
+    pay_gate_url: str = ""  # empty = use the pay page this server serves itself ({APP_BASE_URL}/pay/<id>)
     cors_origins: str = "*"                          # comma separated, "*" = any
     allow_signup: bool = True
     # DEV ONLY: lets TEST-mode webhook/redirect URLs point at localhost so scripts can receive webhooks.
@@ -31,6 +32,14 @@ class Settings(BaseSettings):
     campay_demo_password: str = ""
     campay_demo_webhook_key: str = ""
     campay_demo_base_url: str = "https://demo.campay.net/api/"
+
+    @property
+    def gate_url(self) -> str:
+        return (self.pay_gate_url or f"{self.app_base_url.rstrip('/')}/pay").rstrip("/")
+
+    @property
+    def key_secret(self) -> str:
+        return self.api_key_secret or self.jwt_secret
 
     @property
     def cors_origin_list(self) -> list[str]:

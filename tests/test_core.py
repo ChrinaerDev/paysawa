@@ -71,6 +71,9 @@ def test_ssrf_guard():
         check_public_url("http://8.8.8.8/x")  # http not allowed in live mode
     check_public_url("http://8.8.8.8/x", allow_http=True)
     check_public_url("https://8.8.8.8/x")
+    check_public_url("http://127.0.0.1:9000/hook", allow_http=True, allow_private=True)  # dev switch
+    with pytest.raises(UnsafeUrl):
+        check_public_url("http://127.0.0.1:9000/hook", allow_http=True)  # still blocked by default
 
 
 async def test_simulated_provider_outcomes():
@@ -82,3 +85,63 @@ async def test_simulated_provider_outcomes():
     pend = await sim.payout(PayoutRequest(amount=100, phone="690009999", description="d", external_reference="r"))
     assert (await sim.get_transaction(pend.reference)).status is ProviderStatus.PENDING
     assert sim.settles_immediately
+
+
+def test_revealable_keys_are_deterministic_and_bound_to_secret():
+    import uuid
+
+    kid = uuid.uuid4()
+    full, prefix, digest = security.make_api_key("live", kid, "server-secret")
+    assert full == security.derive_api_key("live", kid, "server-secret")      # same inputs, same key: can be shown again
+    assert full.startswith("sk_live_") and prefix == full[:security.KEY_PREFIX_LEN]
+    assert security.hash_api_key(full) == digest
+    assert security.derive_api_key("live", kid, "other-secret") != full          # tied to the server secret
+    assert security.derive_api_key("live", uuid.uuid4(), "server-secret") != full  # tied to the key id
+    assert security.derive_api_key("test", kid, "server-secret") != full         # tied to the mode
+
+
+def test_app_credentials_tokens_and_callback_signature():
+    import uuid
+
+    app_id = uuid.uuid4()
+    password = security.derive_app_password(app_id, "server-secret")
+    assert password == security.derive_app_password(app_id, "server-secret")           # revealable: same every time
+    assert password != security.derive_app_password(app_id, "other-secret")
+    assert password != security.derive_app_password(uuid.uuid4(), "server-secret")
+    key = security.derive_app_webhook_key(app_id, "server-secret")
+    assert key.startswith("whk_") and key != password
+    assert security.new_app_username().startswith("pa_")
+
+    token = security.create_app_token(app_id, "jwt-secret")
+    assert security.decode_app_token(token, "jwt-secret") == app_id
+    with pytest.raises(jwt.PyJWTError):
+        security.decode_app_token(token, "wrong")
+    with pytest.raises(ValueError):                                                      # dashboard and app tokens are not interchangeable
+        security.decode_app_token(security.create_access_token(app_id, "jwt-secret"), "jwt-secret")
+    with pytest.raises(ValueError):
+        security.decode_access_token(token, "jwt-secret")
+
+    signature = security.sign_callback(key, {"reference": "col_1", "status": "SUCCESSFUL"})
+    assert jwt.decode(signature, key, algorithms=["HS256"])["reference"] == "col_1"
+    with pytest.raises(jwt.PyJWTError):
+        jwt.decode(signature, "wrong-key", algorithms=["HS256"])
+
+
+def test_campay_shaped_helpers():
+    from app.services import compat
+
+    assert compat.parse_amount("5000") == 5000 and compat.parse_amount(5000.0) == 5000 and compat.parse_amount(" 12 ") == 12
+    for bad in ("abc", "0", "-5", "5.5", ""):
+        with pytest.raises(ValueError):
+            compat.parse_amount(bad)
+    assert compat.campay_status("succeeded") == "SUCCESSFUL" and compat.campay_status("expired") == "FAILED"
+    assert compat.campay_status("created") == "PENDING" and compat.campay_status("pending") == "PENDING"
+    assert compat.ussd_for("MTN") == "*126#" and compat.ussd_for("ORANGE") == "#150*50#"
+
+    class Tx:
+        status = "succeeded"; public_id = "col_1"; amount = 5000; currency = "XAF"; operator = "MTN"
+        provider_reference = "r"; merchant_reference = "ext"; description = "d"; failure_message = None
+
+    params = compat.campay_params(Tx)
+    assert params["status"] == "SUCCESSFUL" and params["external_reference"] == "ext" and params["amount"] == "5000" and "signature" not in params
+    assert compat.campay_transaction(Tx)["reference"] == "col_1" and "reason" not in compat.campay_transaction(Tx)

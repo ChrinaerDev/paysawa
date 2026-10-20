@@ -6,8 +6,8 @@ while an internal double-entry ledger tracks what each merchant owns (one accumu
 not split by operator). Deposits and withdrawals work for any MTN or Orange Cameroon number.
 
 > Status: backend feature-complete for a first release. Not yet run against real Neon/Campay by the author
-> of this code: follow section 4 and 9 and report anything that fails. The only pieces still to build are the
-> frontends (dashboard and the hosted pay page, see section 8).
+> of this code: follow sections 3, 4 and 10 and report anything that fails. The only pieces still to build are the
+> frontends (dashboard and the hosted pay page, see section 9).
 
 ## 1. Prerequisites
 
@@ -16,7 +16,7 @@ Python 3.11+, a Neon project, and (for live mode) your Campay production app cre
 ## 2. Database (Neon)
 
 1. Create a Neon branch for development (keep `main` for production).
-2. In the Neon SQL editor run, in this order: `schema.sql`, then `schema_002_checkout_sessions.sql`.
+2. In the Neon SQL editor run, in this order: `schema.sql`, then `schema_002_checkout_sessions.sql`, then `schema_003_apps.sql`.
 3. Copy the **pooled** connection string (host contains `-pooler`). You will paste it as `DATABASE_URL`.
 
 ## 3. Local setup
@@ -35,7 +35,7 @@ Check it works (replace the secret with your `INTERNAL_TICK_SECRET`):
 ```bash
 curl localhost:8000/health
 curl -H "X-Internal-Secret: <INTERNAL_TICK_SECRET>" localhost:8000/internal/db-check
-# expected: "platform_accounts_seeded": true and "migration_002_applied": true
+# expected: "platform_accounts_seeded": true, "migration_002_applied": true and "migration_003_applied": true
 ```
 
 Interactive API docs are served at `http://localhost:8000/docs`.
@@ -68,7 +68,21 @@ BASE_URL=http://localhost:8000 python -m scripts.smoke_test_extended
 BASE_URL=http://localhost:8000 python -m scripts.smoke_test_extended --wait-retry   # also proves the tick retries (~65 s)
 ```
 
-## 5. Create accounts programmatically (no frontend needed)
+## 5. The CLI: the whole app in a terminal
+
+A menu-driven client that talks to the HTTP API only (never the database). It covers signup/login, deposits (collections), withdrawals (payouts), balances and history, API keys and other credentials with a show/hide toggle, webhooks (including a built-in listener that verifies signatures), checkout sessions (you can play the customer), a sandbox lab with guided scenarios, and a checklist that always tells you what to test next.
+
+```bash
+pip install -r cli/requirements.txt
+python -m cli                  # server defaults to http://localhost:8000
+PAYSAWA_URL=https://your-app.onrender.com python -m cli
+```
+
+Only your server URL, login token and checklist progress are saved (in `~/.paysawa/cli.json`). No API key is stored there: the CLI fetches your key from the server when needed. Menu 8 switches TEST/LIVE; every LIVE money action needs you to type `LIVE`.
+
+**Keys are revealable.** Both test and live keys can be shown again at any time (menu 4, or `GET /me/api-keys/{id}/secret` with your dashboard login), the way Campay shows its credentials. They are derived from a server secret (`API_KEY_SECRET`, defaults to `JWT_SECRET`) so only their hashes are stored in the database. **Never change that secret after keys exist**: old keys keep working but can no longer be revealed. Anyone with a merchant's dashboard login can see its live key, so protect that login.
+
+## 6. Create accounts programmatically (no frontend needed)
 
 ### A. Admin CLI (talks to the database directly)
 
@@ -94,7 +108,7 @@ curl -s $BASE/auth/signup -H 'Content-Type: application/json' \
 curl -s $BASE/auth/login -H 'Content-Type: application/json' \
   -d '{"email":"ada@example.com","password":"S3cret-pass"}'
 
-# 3) create an API key (secret is shown ONCE)
+# 3) create an API key (you can reveal it again anytime: GET /me/api-keys/{id}/secret)
 curl -s $BASE/me/api-keys -H "Authorization: Bearer <JWT>" -H 'Content-Type: application/json' \
   -d '{"mode":"test","label":"dev"}'
 
@@ -115,7 +129,7 @@ curl -s $BASE/v1/transactions -H "Authorization: Bearer sk_test_..."
 Money rules: a collection credits the merchant `amount - fee`; a payout debits `amount + fee` (held first, released
 if the payout fails). Defaults: 2.5% fee (250 bps), minimum amount 10 XAF.
 
-## 6. Going live (real money)
+## 7. Going live (real money)
 
 1. Put your Campay **production** credentials in `.env`: `CAMPAY_LIVE_USERNAME`, `CAMPAY_LIVE_PASSWORD`, `CAMPAY_LIVE_WEBHOOK_KEY`.
 2. In the Campay app settings: enable API withdrawals, and set the webhook URL to `<APP_BASE_URL>/webhooks/campay`.
@@ -123,18 +137,20 @@ if the payout fails). Defaults: 2.5% fee (250 bps), minimum amount 10 XAF.
 4. Enable live per merchant (CLI above). Live starts with low limits (50 000 XAF per transaction, 200 000 per day). Raise them per merchant as you gain trust.
 5. Make one small real collection and one small real payout yourself first.
 
+How live payments settle: Campay's webhook (needs a public URL, so not on a local server), plus three polling paths that need no public URL: a watcher that polls Campay for each new pending transaction (every 3 s for a minute, then every 10 s, up to 5 minutes), a refresh whenever a pending transaction is read (API, CLI, pay page), and `/internal/tick`. So a live deposit settles within seconds of the customer's approval even when running locally. If a transaction stays pending, look for a `sync failed` line in the server log.
+
 Not yet confirmed against the real Campay: the webhook format (we assume query parameters including a `signature` JWT
 signed with your webhook key), the phone format sent to Campay, and the balance endpoint path. If step 5 shows a mismatch,
 the only file to fix is `app/providers/campay.py`.
 
-## 7. Merchant webhooks
+## 8. Merchant webhooks
 
 Register an endpoint (HTTPS required in live mode; private/local addresses are blocked):
 
 ```bash
 curl -s $BASE/me/webhook-endpoints -H "Authorization: Bearer <JWT>" -H 'Content-Type: application/json' \
   -d '{"mode":"test","url":"https://example.com/hooks/paysawa","events":["collection.succeeded","payout.failed"]}'
-# leave "events" empty for all events. The signing_secret is shown once.
+# leave "events" empty for all events. Reveal the secret again anytime: GET /me/webhook-endpoints/{id}/secret
 ```
 
 Events: `collection.succeeded`, `collection.failed`, `collection.expired`, `payout.succeeded`, `payout.failed`.
@@ -164,17 +180,23 @@ function verify(secret, rawBody, header) {
 }
 ```
 
-## 8. Hosted pay page contract (frontend to build next)
+## 9. Hosted pay page
+
+The server serves a working pay page itself at `/pay/<session id>` (one static HTML file, `app/static/pay.html`): English or French automatically, mobile friendly, sandbox hints in test mode, live USSD help in live mode, 3 attempts, return button / auto redirect after payment, and a strict content-security policy (no framing, no external scripts). Create a session from the CLI (menu 6): it prints the link, opens it in your browser and watches until it is paid. Set `APP_BASE_URL` to your public URL so links are correct, and `PAY_GATE_URL` only if a separate frontend hosts the page later.
+
+Session times are stored in UTC (`2026-10-17T20:50:08+00:00`); the API also returns `expires_in_seconds`, and the page and CLI show your local time. Links are valid for 60 minutes by default (`expires_in_minutes`, 1 to 1440).
+
+### Contract for a separate frontend
 
 Merchant creates a session (secret key auth):
 
 ```bash
 curl -s $BASE/v1/checkout-sessions -H "Authorization: Bearer sk_test_..." -H 'Content-Type: application/json' \
   -d '{"amount":2000,"description":"Order 1001","merchant_reference":"1001","redirect_url":"https://shop.example.com/thanks"}'
-# -> {"id":"cs_...","url":"<PAY_GATE_URL>/cs_...","status":"open",...}
+# -> {"id":"cs_...","url":"<APP_BASE_URL>/pay/cs_...","status":"open","expires_in_seconds":3600,...}
 ```
 
-The pay page (route `/pay/<session id>`) uses these **public** endpoints (no auth, CORS enabled):
+The pay page uses these **public** endpoints (no auth, CORS enabled):
 
 | Method | Path | Use |
 |---|---|---|
@@ -186,7 +208,7 @@ When `status` becomes `paid`, the response contains `redirect_url`: send the cus
 `collection.succeeded` webhook (its `data.checkout_session` and `data.merchant_reference` identify the order).
 A session allows 3 attempts; public endpoints are rate limited per IP.
 
-## 9. Deploy on Render (free plan) + Neon
+## 10. Deploy on Render (free plan) + Neon
 
 * Build command: `pip install -r requirements.txt`
 * Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
@@ -198,15 +220,15 @@ A session allows 3 attempts; public endpoints are rate limited per IP.
      webhook arrives while the service sleeps), expires stale items and records a ledger-vs-Campay balance comparison.
 * For real money, plan to upgrade Render (no sleeping) and Neon (compute that does not hit free-plan hour limits).
 
-## 10. Endpoint reference
+## 11. Endpoint reference
 
 | Auth | Endpoint | Purpose |
 |---|---|---|
 | none | `GET /health` | keep-alive (no DB) |
 | none | `POST /auth/signup`, `POST /auth/login` | dashboard JWT |
 | JWT | `GET /me`, `GET /me/balance`, `GET /me/transactions?mode=` | dashboard data |
-| JWT | `POST/GET/DELETE /me/api-keys` | key management |
-| JWT | `POST/GET/DELETE /me/webhook-endpoints`, `GET /me/webhook-deliveries` | webhooks |
+| JWT | `POST/GET/DELETE /me/api-keys`, `GET /me/api-keys/{id}/secret` | key management and reveal |
+| JWT | `POST/GET/DELETE /me/webhook-endpoints`, `GET /me/webhook-endpoints/{id}/secret`, `GET /me/webhook-deliveries` | webhooks |
 | `sk_` key | `POST /v1/collections`, `GET /v1/collections/{id}` | collect |
 | `sk_` key | `POST /v1/payouts`, `GET /v1/payouts/{id}` | pay out |
 | `sk_` key | `GET /v1/balance`, `GET /v1/transactions` | balance, history |
@@ -217,7 +239,7 @@ A session allows 3 attempts; public endpoints are rate limited per IP.
 
 Errors always look like `{"error": {"code": "insufficient_funds", "message": "..."}}`.
 
-## 11. Known limits
+## 12. Known limits
 
 * A payout whose provider call times out is left `pending` with its funds held, never auto-released (money may have moved). The tick reports the count under `payouts_needing_review`; resolve those by hand against the Campay dashboard.
 * A collection whose provider call times out stays `pending` and is resolved by the Campay webhook (matched by our transaction id) or expires after 15 minutes.
@@ -226,6 +248,32 @@ Errors always look like `{"error": {"code": "insufficient_funds", "message": "..
 * Charging customers' phones through a public page can be abused: sessions cap attempts at 3 and endpoints are rate limited, but monitor `api_request_logs`/transactions once live.
 * Collecting for third parties may need Campay's agreement and, depending on your activity, financial regulation in your country. This code does not settle that question.
 
-## 12. Tests
+## 13. Tests
 
 `pytest` runs the unit tests (provider mapping, signatures, fees, phone formats, SSRF guard). The database-backed flows are covered by `python -m scripts.smoke_test` and `python -m scripts.smoke_test_extended` against a running server. Never set `ALLOW_PRIVATE_WEBHOOK_URLS=true` in production.
+
+## 14. Apps: Campay-style credentials and the Campay-compatible API
+
+Webhooks are only half of it. Like Campay, Paysawa gives each merchant **apps**: an **app username**, an **app password** and a **webhook key**
+(all revealable any time with a show/hide toggle: CLI menu `a`, or `GET /me/apps/{id}/credentials`). An app uses the Campay-shaped API at
+`<APP_BASE_URL>/api/`, so code written for Campay needs only a different base URL and different credentials:
+
+| Call | Body / result |
+|---|---|
+| `POST /api/token/` | `{username, password}` -> `{token, expires_in}`; then send `Authorization: Token <token>` |
+| `POST /api/collect/` | `{amount, currency, from, description, external_reference}` -> `{reference, ussd_code, operator, status}` |
+| `POST /api/withdraw/` | `{amount, currency, to, description, external_reference}` -> `{reference, status, amount, currency, operator}` |
+| `GET /api/transaction/{reference}/` | `{reference, status (PENDING / SUCCESSFUL / FAILED), amount, currency, operator, external_reference, ...}`; also accepts a payment-link reference (`cs_...`) |
+| `GET /api/balance/` | `{total_balance, held_balance, currency}` (one balance per merchant, so `mtn_balance` / `orange_balance` are null) |
+| `POST /api/get_payment_link/` | `{amount, currency, description, external_reference, redirect_url}` -> `{link, reference}` (the pay page) |
+
+Errors are flat: `{"message": "...", "code": "..."}`. The app's mode (test/live) comes from the app, exactly as the API key's mode does elsewhere.
+
+**Webhooks for apps are Campay-style:** a `GET` to the app's webhook URL with query parameters `status` (`SUCCESSFUL`, `FAILED`, `PENDING`),
+`reference`, `amount`, `currency`, `operator`, `code`, `operator_reference`, `external_reference` and `signature`, where `signature` is a JWT (HS256) signed
+with the app's webhook key over the same parameters. Verify it and compare the fields with what the signature covers
+(see `merchant_app/paysawa_client.py::verify_webhook`). An app only receives events for transactions made through that app (including payments on its payment links).
+
+**The demo merchant server** (`merchant_app/`, port 9000) is a complete example of a second server built on Paysawa: deposit, withdrawal, payment links,
+its own transaction list kept in step by webhooks AND polling, and a webhook log. Setup is in `merchant_app/README.md`.
+

@@ -15,7 +15,7 @@ from app.models import Account, CheckoutSession
 from app.providers.registry import ProviderRegistry
 from app.services import checkout as checkout_service
 from app.services import transactions as tx_service
-from app.services.jobs import run_deliveries
+from app.services.jobs import run_deliveries, start_watch
 from app.services.serializers import session_to_dict, tx_to_dict
 from app.errors import ApiError
 
@@ -35,7 +35,7 @@ class CheckoutSessionIn(BaseModel):
     description: str | None = Field(default=None, max_length=160)
     merchant_reference: str | None = Field(default=None, max_length=100)
     redirect_url: str | None = Field(default=None, max_length=500)
-    expires_in_minutes: int = Field(default=60, ge=5, le=1440)
+    expires_in_minutes: int = Field(default=60, ge=1, le=1440)
     metadata: dict | None = None
 
 
@@ -64,13 +64,21 @@ async def create_collection(
     )
     if not created:
         response.status_code = 200
+    elif tx.status in ("created", "pending"):
+        start_watch(request.app.state, tx)
     background.add_task(run_deliveries, request.app.state)
     return tx_to_dict(tx)
 
 
 @router.get("/collections/{public_id}")
-async def get_collection(public_id: str, caller: ApiCaller = Depends(api_caller), session: AsyncSession = Depends(get_session)):
-    return tx_to_dict(await tx_service.get_by_public_id(session, caller.merchant.id, caller.mode, public_id, "collection"))
+async def get_collection(
+    public_id: str,
+    caller: ApiCaller = Depends(api_caller),
+    session: AsyncSession = Depends(get_session),
+    registry: ProviderRegistry = Depends(get_registry),
+):
+    tx = await tx_service.get_by_public_id(session, caller.merchant.id, caller.mode, public_id, "collection")
+    return tx_to_dict(await tx_service.refresh_if_pending(session, registry, tx))
 
 
 @router.post("/payouts", status_code=201)
@@ -92,13 +100,21 @@ async def create_payout(
     )
     if not created:
         response.status_code = 200
+    elif tx.status in ("created", "pending"):
+        start_watch(request.app.state, tx)
     background.add_task(run_deliveries, request.app.state)
     return tx_to_dict(tx)
 
 
 @router.get("/payouts/{public_id}")
-async def get_payout(public_id: str, caller: ApiCaller = Depends(api_caller), session: AsyncSession = Depends(get_session)):
-    return tx_to_dict(await tx_service.get_by_public_id(session, caller.merchant.id, caller.mode, public_id, "payout"))
+async def get_payout(
+    public_id: str,
+    caller: ApiCaller = Depends(api_caller),
+    session: AsyncSession = Depends(get_session),
+    registry: ProviderRegistry = Depends(get_registry),
+):
+    tx = await tx_service.get_by_public_id(session, caller.merchant.id, caller.mode, public_id, "payout")
+    return tx_to_dict(await tx_service.refresh_if_pending(session, registry, tx))
 
 
 @router.get("/balance")
@@ -122,8 +138,10 @@ async def transactions(
     offset: int = Query(0, ge=0),
     caller: ApiCaller = Depends(api_caller),
     session: AsyncSession = Depends(get_session),
+    registry: ProviderRegistry = Depends(get_registry),
 ):
     rows = await tx_service.list_transactions(session, caller.merchant.id, caller.mode, type_=type, status=status, limit=limit, offset=offset)
+    await tx_service.refresh_many(session, registry, rows)
     return {"data": [tx_to_dict(tx) for tx in rows], "limit": limit, "offset": offset}
 
 
@@ -139,7 +157,7 @@ async def create_checkout_session(
         merchant_reference=body.merchant_reference, redirect_url=body.redirect_url,
         expires_in_minutes=body.expires_in_minutes, user_metadata=_check_metadata(body.metadata),
     )
-    return session_to_dict(cs, settings.pay_gate_url)
+    return session_to_dict(cs, settings.gate_url)
 
 
 @router.get("/checkout-sessions/{public_id}")
@@ -160,6 +178,6 @@ async def get_checkout_session(
     ).scalar_one_or_none()
     if cs is None:
         raise ApiError(404, "not_found", "Checkout session not found.")
-    data = session_to_dict(cs, settings.pay_gate_url)
+    data = session_to_dict(cs, settings.gate_url)
     data["status"] = checkout_service.effective_status(cs)
     return data

@@ -68,6 +68,8 @@ class WebhookEndpoint(Base):
     signing_secret: Mapped[str] = mapped_column(Text)
     events: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default=text("'{}'"))
     is_active: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
+    style: Mapped[str] = mapped_column(Text, server_default=text("'paysawa'"))  # "paysawa" (JSON POST) | "campay" (signed GET)
+    app_id: Mapped[uuid.UUID | None] = _uuid_fk("apps", nullable=True, ondelete="CASCADE")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=_NOW)
 
 
@@ -197,3 +199,18 @@ class CheckoutSession(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=_NOW)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class App(Base):
+    """Campay-style credentials: username + password (+ derived webhook key) for the Campay-compatible /api."""
+    __tablename__ = "apps"
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    merchant_id: Mapped[uuid.UUID] = _uuid_fk("merchants", ondelete="CASCADE")
+    mode: Mapped[str] = mapped_column(Text)
+    name: Mapped[str] = mapped_column(Text)
+    username: Mapped[str] = mapped_column(Text, unique=True)
+    password_hash: Mapped[str] = mapped_column(Text)
+    webhook_url: Mapped[str | None] = mapped_column(Text)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=_NOW)

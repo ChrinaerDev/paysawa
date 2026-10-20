@@ -13,6 +13,7 @@ from app.fees import MIN_AMOUNT
 from app.models import CheckoutSession, Merchant, Transaction
 from app.netsafety import UnsafeUrl, check_public_url
 from app.providers.registry import ProviderRegistry
+from app.services import ledger
 from app.security import new_public_id
 from app.services.transactions import create_collection
 
@@ -34,6 +35,7 @@ async def create_session(
     redirect_url: str | None,
     expires_in_minutes: int,
     user_metadata: dict | None,
+    extra_meta: dict | None = None,
 ) -> CheckoutSession:
     if merchant.status != "active":
         raise ApiError(403, "account_suspended", "This account cannot create checkout sessions.")
@@ -57,8 +59,8 @@ async def create_session(
         description=description,
         merchant_reference=merchant_reference,
         redirect_url=redirect_url,
-        meta={"user": user_metadata or {}},
-        expires_at=_now() + timedelta(minutes=max(5, min(expires_in_minutes, 24 * 60))),
+        meta={"user": user_metadata or {}, **(extra_meta or {})},
+        expires_at=_now() + timedelta(minutes=max(1, min(expires_in_minutes, 24 * 60))),
     )
     session.add(cs)
     await session.commit()
@@ -68,6 +70,7 @@ async def create_session(
 async def get_public(session: AsyncSession, public_id: str, *, lock: bool = False) -> CheckoutSession:
     stmt = select(CheckoutSession).where(CheckoutSession.public_id == public_id).execution_options(populate_existing=True)
     if lock:
+        await ledger.set_lock_timeout(session)
         stmt = stmt.with_for_update()
     cs = (await session.execute(stmt)).scalar_one_or_none()
     if cs is None:
@@ -114,7 +117,7 @@ async def pay(session: AsyncSession, registry: ProviderRegistry, public_id: str,
         merchant_reference=cs.merchant_reference,
         idempotency_key=None,
         user_metadata=(cs.meta or {}).get("user"),
-        internal={"checkout_session": cs.public_id},
+        internal={"checkout_session": cs.public_id, **({"app_id": (cs.meta or {})["app_id"]} if (cs.meta or {}).get("app_id") else {})},
     )
     cs = await get_public(session, public_id, lock=True)
     if cs.status == "open":

@@ -7,7 +7,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import auth, gate, internal, v1, webhooks_in
+from app.api import apps, auth, compat, gate, internal, pages, v1, webhooks_in
 from app.config import get_settings
 from app.db import dispose_engine
 from app.errors import ApiError
@@ -55,8 +55,16 @@ async def validation_handler(_: Request, exc: RequestValidationError):
 
 
 @app.exception_handler(Exception)
-async def unhandled_handler(_: Request, exc: Exception):
-    logging.getLogger("paysawa").exception("unhandled error")
+async def unhandled_handler(request: Request, exc: Exception):
+    log = logging.getLogger("paysawa")
+    text_ = str(exc).lower()
+    if "lock timeout" in text_:
+        log.error("LOCK TIMEOUT on %s %s: another transaction holds a row this request needs. %s", request.method, request.url.path, str(exc)[:500])
+        return JSONResponse(status_code=503, content={"error": {"code": "busy", "message": "Another operation on this account is in progress. Retry in a few seconds."}})
+    if "timeout" in text_ or isinstance(exc, TimeoutError):
+        log.error("DB TIMEOUT on %s %s: %s %s", request.method, request.url.path, type(exc).__name__, str(exc)[:500])
+        return JSONResponse(status_code=503, content={"error": {"code": "db_timeout", "message": "The database did not answer in time. Retry shortly."}})
+    log.exception("unhandled error on %s %s", request.method, request.url.path)
     return JSONResponse(status_code=500, content={"error": {"code": "internal_error", "message": f"{type(exc).__name__}: see server logs"}})
 
 
@@ -69,6 +77,9 @@ async def health() -> dict:
 
 app.include_router(auth.router)
 app.include_router(v1.router)
+app.include_router(apps.router)
+app.include_router(compat.router)
 app.include_router(gate.router)
+app.include_router(pages.router)
 app.include_router(webhooks_in.router)
 app.include_router(internal.router)

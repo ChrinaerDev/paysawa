@@ -23,11 +23,13 @@ async def db_check(session: AsyncSession = Depends(get_session)) -> dict:
     await session.execute(text("SELECT 1"))
     rows = (await session.execute(text("SELECT mode, type FROM accounts WHERE merchant_id IS NULL ORDER BY mode, type"))).all()
     has_checkout = (await session.execute(text("SELECT to_regclass('public.checkout_sessions') IS NOT NULL"))).scalar_one()
+    has_apps = (await session.execute(text("SELECT to_regclass('public.apps') IS NOT NULL"))).scalar_one()
     return {
         "db": "ok",
         "platform_accounts": [f"{mode}:{type_}" for mode, type_ in rows],
         "platform_accounts_seeded": len(rows) == 4,
         "migration_002_applied": bool(has_checkout),
+        "migration_003_applied": bool(has_apps),
     }
 
 

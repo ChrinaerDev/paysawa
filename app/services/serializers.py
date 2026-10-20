@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.models import CheckoutSession, Transaction
 
@@ -51,6 +51,7 @@ def session_to_dict(cs: CheckoutSession, pay_gate_url: str) -> dict:
         "metadata": (cs.meta or {}).get("user", {}),
         "url": f"{pay_gate_url.rstrip('/')}/{cs.public_id}",
         "expires_at": iso(cs.expires_at),
+        "expires_in_seconds": max(0, int((cs.expires_at - datetime.now(timezone.utc)).total_seconds())),
         "created_at": iso(cs.created_at),
         "paid_at": iso(cs.paid_at),
     }

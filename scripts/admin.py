@@ -13,6 +13,7 @@ import uuid
 
 from sqlalchemy import select
 
+from app.config import get_settings
 from app.db import dispose_engine, get_sessionmaker
 from app.errors import ApiError
 from app.models import Merchant, Transaction
@@ -33,12 +34,12 @@ async def run(args) -> None:
             m = await merchant_service.create_merchant(session, name=args.name, email=args.email, password=args.password, live_enabled=args.live)
             print(f"Created merchant {m.id} ({m.email}), live_enabled={m.live_enabled}")
             if args.with_test_key:
-                key, secret = await merchant_service.issue_api_key(session, m, "test", "default")
-                print(f"Test API key (shown once): {secret}")
+                key, secret = await merchant_service.issue_api_key(session, m, "test", "default", get_settings().key_secret)
+                print(f"Test API key: {secret}")
         elif args.command == "create-key":
             m = await _merchant(session, args.email)
-            key, secret = await merchant_service.issue_api_key(session, m, args.mode, args.label)
-            print(f"{args.mode} API key (shown once): {secret}")
+            key, secret = await merchant_service.issue_api_key(session, m, args.mode, args.label, get_settings().key_secret)
+            print(f"{args.mode} API key: {secret}")
         elif args.command == "enable-live":
             m = await _merchant(session, args.email)
             m.live_enabled = True

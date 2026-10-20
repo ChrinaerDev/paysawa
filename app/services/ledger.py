@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.errors import ApiError
 from app.models import Account, LedgerEntry, LedgerJournal, Transaction
+
+
+async def set_lock_timeout(session: AsyncSession, seconds: int = 10) -> None:
+    """Fail fast instead of hanging if another transaction holds the row (applies to this transaction only)."""
+    await session.execute(text(f"SET LOCAL lock_timeout = '{int(seconds)}s'"))
 
 
 async def get_account(
@@ -19,6 +24,7 @@ async def get_account(
     stmt = stmt.where(Account.merchant_id.is_(None) if merchant_id is None else Account.merchant_id == merchant_id)
     stmt = stmt.execution_options(populate_existing=True)
     if lock:
+        await set_lock_timeout(session)
         stmt = stmt.with_for_update()
     account = (await session.execute(stmt)).scalar_one_or_none()
     if account is None:

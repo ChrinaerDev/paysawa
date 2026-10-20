@@ -9,6 +9,7 @@ Rules that matter for money:
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -203,6 +204,7 @@ async def create_payout(
     merchant_reference: str | None,
     idempotency_key: str | None,
     user_metadata: dict | None = None,
+    internal: dict | None = None,
 ) -> tuple[Transaction, bool]:
     _check_can_transact(merchant, mode)
     merchant_id = merchant.id  # plain value: ORM objects are expired by any later rollback
@@ -232,7 +234,7 @@ async def create_payout(
         merchant_reference=merchant_reference,
         idempotency_key=idempotency_key,
         provider=registry.provider_name(mode),
-        meta={"user": user_metadata or {}},
+        meta={"user": user_metadata or {}, **(internal or {})},
     )
     session.add(tx)
     try:
@@ -300,6 +302,7 @@ async def apply_provider_status(
     provider_status: str | None = None,
 ) -> tuple[Transaction, bool]:
     """Idempotent state transition under a row lock. Caller commits. Returns (tx, changed)."""
+    await ledger.set_lock_timeout(session)
     tx = (
         await session.execute(
             select(Transaction).where(Transaction.id == tx_id).with_for_update().execution_options(populate_existing=True)
@@ -372,6 +375,31 @@ async def sync_with_provider(session: AsyncSession, registry: ProviderRegistry, 
     return changed
 
 
+# ------------------------------------------------------------------ on-demand refresh
+_last_check: dict = {}
+_MIN_RECHECK_SECONDS = 3.0
+
+
+async def refresh_if_pending(session: AsyncSession, registry: ProviderRegistry, tx: Transaction) -> Transaction:
+    """If a transaction is still pending, ask the provider for its latest status (at most every few seconds per
+    transaction). This is what makes live payments settle without a public webhook URL."""
+    if tx.status not in ("created", "pending") or not tx.provider_reference or tx.provider == "simulated":
+        return tx
+    now = time.monotonic()
+    if now - _last_check.get(tx.id, 0.0) < _MIN_RECHECK_SECONDS:
+        return tx
+    if len(_last_check) > 5000:
+        _last_check.clear()
+    _last_check[tx.id] = now
+    await sync_with_provider(session, registry, tx.id)
+    return tx
+
+
+async def refresh_many(session: AsyncSession, registry: ProviderRegistry, txs: list[Transaction], limit: int = 5) -> None:
+    for tx in [t for t in txs if t.status in ("created", "pending")][:limit]:
+        await refresh_if_pending(session, registry, tx)
+
+
 # ------------------------------------------------------------------ background reconciliation
 async def reconcile_pending(session: AsyncSession, registry: ProviderRegistry, limit: int = 20) -> dict:
     cutoff = utcnow() - timedelta(seconds=30)  # give inbound webhooks a head start
@@ -412,6 +440,7 @@ async def expire_stale(session: AsyncSession) -> dict:
     ).scalars().all()
     expired = 0
     for tx_id in ids:
+        await ledger.set_lock_timeout(session)
         tx = (
             await session.execute(
                 select(Transaction).where(Transaction.id == tx_id).with_for_update().execution_options(populate_existing=True)

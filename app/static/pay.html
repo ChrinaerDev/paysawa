@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Paysawa checkout</title>
+<style nonce="{{NONCE}}">
+:root{--bg:#eef2f6;--card:#fff;--text:#0f172a;--muted:#64748b;--brand:#0f766e;--brand2:#0b5a54;--ok:#15803d;--bad:#b91c1c;--warn:#92400e;--warnbg:#fef3c7;--line:#e2e8f0;--input:#f8fafc}
+@media (prefers-color-scheme:dark){:root{--bg:#0b1220;--card:#121c33;--text:#e5e7eb;--muted:#94a3b8;--brand:#2dd4bf;--brand2:#14b8a6;--ok:#4ade80;--bad:#f87171;--warn:#fcd34d;--warnbg:#3b2f0b;--line:#22304f;--input:#0e1730}}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);color:var(--text);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:16px}
+.wrap{width:100%;max-width:420px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:24px;box-shadow:0 8px 30px rgba(15,23,42,.08)}
+.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+.merchant{font-weight:600;font-size:15px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.brand{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--brand);font-weight:700}
+.amount{font-size:36px;font-weight:700;letter-spacing:-.02em;margin:4px 0}
+.desc{color:var(--muted);margin:0 0 12px;word-break:break-word}
+.banner{background:var(--warnbg);color:var(--warn);border-radius:10px;padding:10px 12px;font-size:13px;margin:12px 0}
+.expiry{font-size:13px;color:var(--muted);margin:8px 0 0}
+label{display:block;font-weight:600;font-size:14px;margin:16px 0 6px}
+input[type=tel]{width:100%;font:inherit;font-size:18px;padding:13px 14px;border-radius:10px;border:1px solid var(--line);background:var(--input);color:var(--text)}
+input[type=tel]:focus{outline:2px solid var(--brand);border-color:transparent}
+.hint{font-size:12px;color:var(--muted);margin-top:6px}
+.error{color:var(--bad);font-size:14px;margin:10px 0 0;min-height:1.2em}
+button.primary,a.primary{display:block;width:100%;text-align:center;text-decoration:none;font:inherit;font-weight:600;font-size:17px;padding:14px;border:0;border-radius:10px;background:var(--brand);color:#fff;cursor:pointer;margin-top:16px}
+@media (prefers-color-scheme:dark){button.primary,a.primary{color:#04201d}}
+button.primary:hover,a.primary:hover{background:var(--brand2)}
+button.primary:disabled{opacity:.6;cursor:default}
+button.link{background:none;border:0;color:var(--muted);text-decoration:underline;font:inherit;font-size:14px;cursor:pointer;margin-top:12px;padding:0}
+.center{text-align:center}
+.icon{width:64px;height:64px;border-radius:50%;margin:8px auto 12px;display:flex;align-items:center;justify-content:center;font-size:34px;font-weight:700;color:#fff}
+.icon.ok{background:var(--ok)} .icon.bad{background:var(--bad)} .icon.idle{background:var(--muted)}
+.spinner{width:44px;height:44px;border:4px solid var(--line);border-top-color:var(--brand);border-radius:50%;margin:8px auto 14px;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+h2{font-size:20px;margin:6px 0}
+p.sub{color:var(--muted);margin:6px 0}
+.foot{display:flex;justify-content:space-between;align-items:center;margin-top:18px;font-size:12px;color:var(--muted)}
+.foot button{background:none;border:1px solid var(--line);color:var(--muted);border-radius:6px;padding:3px 8px;font-size:12px;cursor:pointer}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <div class="card">
+    <div class="top"><span class="merchant" id="merchant"></span><span class="brand">Paysawa</span></div>
+    <div class="amount" id="amount"></div>
+    <p class="desc" id="desc" hidden></p>
+    <div class="banner" id="banner" hidden></div>
+    <div id="view"></div>
+    <p class="expiry" id="expiry" hidden></p>
+    <div class="foot"><span id="secure"></span><button id="lang" type="button">FR</button></div>
+  </div>
+</main>
+<script nonce="{{NONCE}}">
+(function () {
+  "use strict";
+  var API = window.PAYSAWA_API || "";            // same origin by default
+  var id = decodeURIComponent((location.pathname.split("/").filter(Boolean).pop()) || "");
+  var T = {
+    en: {
+      secure: "Secure payment by Paysawa", sandbox: "SANDBOX: no real money moves. Use 670000001 (success), 670000000 (failure) or 670009999 (stays pending).",
+      phone_label: "Mobile Money number (MTN or Orange)", phone_ph: "6XX XX XX XX", hint: "Works with MTN Mobile Money and Orange Money.",
+      pay_btn: "Pay {amount}", sending: "Sending request...", bad_phone: "Enter a valid Cameroon mobile number, for example 670 00 00 01.",
+      attempts: "{n} attempt(s) left", expires: "This link expires in {mins} (at {time}).", lt_min: "less than a minute", mins: "{n} min", hours: "{n} h",
+      wait_title: "Approve the payment on your phone", wait_text: "We sent a payment request to {phone}. Enter your Mobile Money PIN to confirm.",
+      ussd: "No prompt? Dial *126# (MTN) or #150*50# (Orange) to see pending payments.", sandbox_wait: "Sandbox: the payment is simulated and settles in a moment.",
+      slow: "Still waiting. If you approved the payment it can take a little longer.", check_again: "Check again",
+      paid_title: "Payment received", paid_text: "Thank you. {merchant} has been notified.", return_btn: "Return to {merchant}", redirecting: "Redirecting in {n} s...", stay: "Stay on this page",
+      failed_title: "Payment not completed", try_again: "Try again", no_attempts: "No attempts left. Ask {merchant} for a new link.",
+      expired_title: "This payment link has expired", expired_text: "Ask {merchant} for a new link.",
+      nf_title: "Payment link not found", nf_text: "Check the link or ask the merchant for a new one.",
+      err_title: "Something went wrong", retry: "Retry", offline: "Cannot reach the payment server. Check your connection."
+    },
+    fr: {
+      secure: "Paiement sécurisé par Paysawa", sandbox: "BAC À SABLE : aucun argent réel. Utilisez 670000001 (succès), 670000000 (échec) ou 670009999 (reste en attente).",
+      phone_label: "Numéro Mobile Money (MTN ou Orange)", phone_ph: "6XX XX XX XX", hint: "Fonctionne avec MTN Mobile Money et Orange Money.",
+      pay_btn: "Payer {amount}", sending: "Envoi de la demande...", bad_phone: "Entrez un numéro mobile camerounais valide, par exemple 670 00 00 01.",
+      attempts: "{n} tentative(s) restante(s)", expires: "Ce lien expire dans {mins} (à {time}).", lt_min: "moins d'une minute", mins: "{n} min", hours: "{n} h",
+      wait_title: "Validez le paiement sur votre téléphone", wait_text: "Nous avons envoyé une demande de paiement au {phone}. Entrez votre code PIN Mobile Money pour confirmer.",
+      ussd: "Pas de demande ? Composez *126# (MTN) ou #150*50# (Orange) pour voir les paiements en attente.", sandbox_wait: "Bac à sable : le paiement est simulé et se termine dans un instant.",
+      slow: "Toujours en attente. Si vous avez validé, cela peut prendre un peu plus de temps.", check_again: "Vérifier à nouveau",
+      paid_title: "Paiement reçu", paid_text: "Merci. {merchant} a été informé.", return_btn: "Retourner chez {merchant}", redirecting: "Redirection dans {n} s...", stay: "Rester sur cette page",
+      failed_title: "Paiement non abouti", try_again: "Réessayer", no_attempts: "Plus de tentatives. Demandez un nouveau lien à {merchant}.",
+      expired_title: "Ce lien de paiement a expiré", expired_text: "Demandez un nouveau lien à {merchant}.",
+      nf_title: "Lien de paiement introuvable", nf_text: "Vérifiez le lien ou demandez-en un nouveau au marchand.",
+      err_title: "Une erreur est survenue", retry: "Réessayer", offline: "Impossible de joindre le serveur de paiement. Vérifiez votre connexion."
+    }
+  };
+  var lang = "en";
+  try { lang = localStorage.getItem("paysawa_lang") || (((navigator.language || "en").toLowerCase().indexOf("fr") === 0) ? "fr" : "en"); } catch (e) {}
+  var state = { view: null, phone: "", poll: null, pollUntil: 0, redirectTimer: null, merchant: "" };
+
+  function t(key, vars) {
+    var s = (T[lang] && T[lang][key]) || T.en[key] || key;
+    if (vars) for (var k in vars) s = s.split("{" + k + "}").join(vars[k]);
+    return s;
+  }
+  function $(i) { return document.getElementById(i); }
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function clear(n) { while (n.firstChild) n.removeChild(n.firstChild); }
+  function money(n, cur) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ") + " " + (cur || "XAF"); }
+  function mask(p) { return p.length > 3 ? p.slice(0, -3).replace(/\d/g, "•") + p.slice(-3) : p; }
+  function stopPolling() { if (state.poll) { clearTimeout(state.poll); state.poll = null; } }
+  function stopRedirect() { if (state.redirectTimer) { clearInterval(state.redirectTimer); state.redirectTimer = null; } }
+
+  async function api(method, path, body) {
+    var res;
+    try {
+      res = await fetch(API + path, { method: method, headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
+    } catch (e) { var off = new Error(t("offline")); off.code = "offline"; throw off; }
+    var data = {};
+    try { data = await res.json(); } catch (e) {}
+    if (!res.ok) { var er = (data && data.error) || {}; var err = new Error(er.message || ("HTTP " + res.status)); err.code = er.code || "http_error"; err.status = res.status; throw err; }
+    return data;
+  }
+
+  function when(secs, iso) {
+    var mins = Math.round(secs / 60), span;
+    if (secs < 60) span = t("lt_min"); else if (mins < 120) span = t("mins", { n: mins }); else span = t("hours", { n: Math.round(mins / 60) });
+    var time = "";
+    try { time = new Date(iso).toLocaleString(lang, { dateStyle: "medium", timeStyle: "short" }); } catch (e) { time = iso; }
+    return t("expires", { mins: span, time: time });
+  }
+
+  function frame(v) {
+    state.merchant = v.merchant_name || "";
+    $("merchant").textContent = state.merchant || "Paysawa";
+    $("amount").textContent = money(v.amount, v.currency);
+    var d = $("desc"); d.textContent = v.description || ""; d.hidden = !v.description;
+    var b = $("banner"); b.textContent = t("sandbox"); b.hidden = v.mode !== "test";
+    var x = $("expiry");
+    if (v.status === "open") { x.textContent = when(v.expires_in_seconds, v.expires_at); x.hidden = false; } else { x.hidden = true; }
+    $("secure").textContent = t("secure");
+    $("lang").textContent = lang === "en" ? "FR" : "EN";
+    document.documentElement.lang = lang;
+  }
+
+  function show(node) { var v = $("view"); clear(v); v.appendChild(node); }
+
+  function screenMessage(kind, titleKey, textKey, withRetry) {
+    var box = el("div", "center");
+    box.appendChild(el("div", "icon " + kind, kind === "bad" ? "!" : "?"));
+    box.appendChild(el("h2", "", t(titleKey)));
+    if (textKey) box.appendChild(el("p", "sub", t(textKey, { merchant: state.merchant || "the merchant" })));
+    if (withRetry) { var b = el("button", "primary", t("retry")); b.addEventListener("click", load); box.appendChild(b); }
+    show(box);
+  }
+
+  function screenForm(v, failure) {
+    stopPolling(); stopRedirect();
+    var form = el("div");
+    if (failure) {
+      var f = el("div", "center"); f.appendChild(el("div", "icon bad", "!")); f.appendChild(el("h2", "", t("failed_title"))); f.appendChild(el("p", "sub", failure));
+      form.appendChild(f);
+    }
+    if (v.attempts_left <= 0) {
+      form.appendChild(el("p", "sub center", t("no_attempts", { merchant: state.merchant || "the merchant" })));
+      show(form); return;
+    }
+    form.appendChild(el("label", "", t("phone_label")));
+    var input = el("input"); input.type = "tel"; input.id = "phone"; input.setAttribute("inputmode", "tel"); input.setAttribute("autocomplete", "tel");
+    input.placeholder = t("phone_ph"); input.value = state.phone || ""; form.appendChild(input);
+    form.appendChild(el("div", "hint", t("hint") + "  " + t("attempts", { n: v.attempts_left })));
+    var err = el("div", "error"); err.setAttribute("role", "alert"); form.appendChild(err);
+    var btn = el("button", "primary", failure ? t("try_again") + " · " + money(v.amount, v.currency) : t("pay_btn", { amount: money(v.amount, v.currency) }));
+    btn.type = "button"; form.appendChild(btn);
+
+    async function submit() {
+      var digits = input.value.replace(/\D/g, "");
+      if (!(/^6\d{8}$/.test(digits) || /^2376\d{8}$/.test(digits))) { err.textContent = t("bad_phone"); return; }
+      err.textContent = ""; state.phone = digits; btn.disabled = true; btn.textContent = t("sending");
+      try {
+        var nv = await api("POST", "/gate/sessions/" + encodeURIComponent(id) + "/pay", { phone: digits });
+        render(nv);
+      } catch (e) {
+        btn.disabled = false; btn.textContent = t("pay_btn", { amount: money(v.amount, v.currency) });
+        if (e.code === "payment_in_progress") { load(); return; }
+        if (e.code === "already_paid" || e.code === "session_expired" || e.code === "too_many_attempts") { load(); return; }
+        err.textContent = e.message;
+      }
+    }
+    btn.addEventListener("click", submit);
+    input.addEventListener("keydown", function (ev) { if (ev.key === "Enter") submit(); });
+    show(form);
+    input.focus();
+  }
+
+  function screenWaiting(v) {
+    var box = el("div", "center");
+    box.appendChild(el("div", "spinner"));
+    box.appendChild(el("h2", "", t("wait_title")));
+    if (state.phone) box.appendChild(el("p", "sub", t("wait_text", { phone: mask(state.phone) })));
+    box.appendChild(el("p", "sub", v.mode === "test" ? t("sandbox_wait") : t("ussd")));
+    var slow = el("div", "center"); slow.id = "slow"; box.appendChild(slow);
+    show(box);
+    if (!state.poll) { state.pollUntil = Date.now() + 6 * 60 * 1000; schedulePoll(); }
+  }
+
+  function schedulePoll() {
+    state.poll = setTimeout(async function () {
+      state.poll = null;
+      try { render(await api("GET", "/gate/sessions/" + encodeURIComponent(id) + "/status")); } catch (e) { /* keep trying until the deadline */ }
+      var stillWaiting = $("slow") != null;
+      if (!stillWaiting) return;
+      if (Date.now() > state.pollUntil) {
+        var s = $("slow"); clear(s); s.appendChild(el("p", "sub", t("slow")));
+        var b = el("button", "link", t("check_again")); b.addEventListener("click", function () { state.pollUntil = Date.now() + 6 * 60 * 1000; schedulePoll(); clear(s); });
+        s.appendChild(b); return;
+      }
+      schedulePoll();
+    }, 2500);
+  }
+
+  function safeUrl(u) {
+    try { var p = new URL(u); return (p.protocol === "https:" || p.protocol === "http:") ? p.href : null; } catch (e) { return null; }
+  }
+
+  function screenPaid(v) {
+    stopPolling();
+    var box = el("div", "center");
+    box.appendChild(el("div", "icon ok", "✓"));
+    box.appendChild(el("h2", "", t("paid_title")));
+    box.appendChild(el("p", "sub", t("paid_text", { merchant: state.merchant || "the merchant" })));
+    var url = v.redirect_url ? safeUrl(v.redirect_url) : null;
+    if (url) {
+      var a = el("a", "primary", t("return_btn", { merchant: state.merchant || "the merchant" })); a.href = url; a.rel = "noopener"; box.appendChild(a);
+      var note = el("p", "sub", ""); box.appendChild(note);
+      var stay = el("button", "link", t("stay")); box.appendChild(stay);
+      var left = 8; note.textContent = t("redirecting", { n: left });
+      stopRedirect();
+      state.redirectTimer = setInterval(function () {
+        left -= 1; note.textContent = t("redirecting", { n: left });
+        if (left <= 0) { stopRedirect(); location.assign(url); }
+      }, 1000);
+      stay.addEventListener("click", function () { stopRedirect(); note.textContent = ""; stay.hidden = true; });
+    }
+    show(box);
+  }
+
+  function render(v) {
+    state.view = v;
+    frame(v);
+    var pay = v.payment;
+    if (v.status === "paid") return screenPaid(v);
+    if (v.status === "expired") { stopPolling(); return screenMessage("idle", "expired_title", "expired_text", false); }
+    if (pay && (pay.status === "pending" || pay.status === "succeeded")) return screenWaiting(v);
+    return screenForm(v, pay && pay.status === "failed" ? (pay.failure_message || t("failed_title")) : null);
+  }
+
+  async function load() {
+    stopPolling(); stopRedirect();
+    try {
+      render(await api("GET", "/gate/sessions/" + encodeURIComponent(id)));
+    } catch (e) {
+      $("secure").textContent = t("secure");
+      if (e.status === 404) screenMessage("idle", "nf_title", "nf_text", false);
+      else { screenMessage("bad", "err_title", null, true); var v = $("view"); v.insertBefore(el("p", "sub center", e.message), v.firstChild.nextSibling); }
+    }
+  }
+
+  $("lang").addEventListener("click", function () {
+    lang = lang === "en" ? "fr" : "en";
+    try { localStorage.setItem("paysawa_lang", lang); } catch (e) {}
+    if (state.view) render(state.view);
+  });
+  load();
+})();
+</script>
+</body>
+</html>

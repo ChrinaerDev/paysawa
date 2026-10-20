@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demo merchant app (built on Paysawa)</title>
+<style>
+:root{--bg:#eef2f6;--card:#fff;--text:#0f172a;--muted:#64748b;--brand:#0f766e;--line:#e2e8f0;--ok:#15803d;--bad:#b91c1c;--warn:#b45309;--input:#f8fafc}
+@media (prefers-color-scheme:dark){:root{--bg:#0b1220;--card:#121c33;--text:#e5e7eb;--muted:#94a3b8;--brand:#2dd4bf;--line:#22304f;--ok:#4ade80;--bad:#f87171;--warn:#fcd34d;--input:#0e1730}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:20px}
+.wrap{max-width:1000px;margin:0 auto;display:grid;gap:16px}
+h1{margin:0;font-size:22px} h2{margin:0 0 10px;font-size:16px}
+.sub{color:var(--muted);margin:2px 0 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+label{display:block;font-size:13px;color:var(--muted);margin:8px 0 3px}
+input{width:100%;font:inherit;padding:9px 10px;border-radius:8px;border:1px solid var(--line);background:var(--input);color:var(--text)}
+button{font:inherit;font-weight:600;padding:9px 14px;border:0;border-radius:8px;background:var(--brand);color:#fff;cursor:pointer;margin-top:10px}
+@media (prefers-color-scheme:dark){button{color:#04201d}}
+button.ghost{background:none;border:1px solid var(--line);color:var(--muted);font-weight:500}
+.msg{margin-top:8px;font-size:13px;min-height:1.2em;word-break:break-word}
+.ok{color:var(--ok)} .bad{color:var(--bad)} .warn{color:var(--warn)} .muted{color:var(--muted)}
+table{width:100%;border-collapse:collapse;font-size:13px} th,td{text-align:left;padding:7px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:600}
+.pill{display:inline-block;padding:1px 8px;border-radius:99px;font-size:12px;font-weight:600;border:1px solid currentColor}
+code{background:var(--input);padding:1px 5px;border-radius:5px;word-break:break-all}
+.scroll{overflow-x:auto}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div>
+    <h1>Demo merchant app</h1>
+    <p class="sub">A separate server (its own port) that uses a Paysawa app's credentials, the way Paysawa uses Campay's.</p>
+  </div>
+
+  <div class="grid">
+    <div class="card"><h2>Connection to Paysawa</h2><div class="kv" id="conn"></div><div class="msg" id="connmsg"></div>
+      <button class="ghost" id="reload" type="button">Refresh</button></div>
+    <div class="card"><h2>Balance in my Paysawa account</h2><div id="bal" class="muted">...</div></div>
+  </div>
+
+  <div class="grid">
+    <form class="card" id="f-deposit"><h2>Deposit</h2><div class="sub">Ask a phone to pay me.</div>
+      <label>Phone</label><input name="phone" value="670000001" inputmode="tel" required>
+      <label>Amount (XAF)</label><input name="amount" type="number" min="10" value="5000" required>
+      <label>Description</label><input name="description" value="Demo deposit">
+      <button type="submit">Request payment</button><div class="msg" id="m-deposit"></div></form>
+    <form class="card" id="f-withdraw"><h2>Withdrawal</h2><div class="sub">Pay money out of my Paysawa account.</div>
+      <label>Phone</label><input name="phone" value="690000001" inputmode="tel" required>
+      <label>Amount (XAF)</label><input name="amount" type="number" min="10" value="1000" required>
+      <label>Description</label><input name="description" value="Demo withdrawal">
+      <button type="submit">Send money</button><div class="msg" id="m-withdraw"></div></form>
+    <form class="card" id="f-link"><h2>Payment link</h2><div class="sub">My own pay gate: a link a customer opens to pay.</div>
+      <label>Amount (XAF)</label><input name="amount" type="number" min="10" value="2000" required>
+      <label>Description</label><input name="description" value="Demo order">
+      <button type="submit">Create link</button><div class="msg" id="m-link"></div></form>
+  </div>
+
+  <div class="card"><h2>My transactions <span class="muted" style="font-weight:400">(kept in step with Paysawa by webhooks and polling)</span></h2>
+    <div class="scroll"><table><thead><tr><th>When</th><th>Type</th><th>Phone</th><th>Amount</th><th>Status</th><th>Details</th></tr></thead><tbody id="rows"></tbody></table></div>
+    <div class="muted" id="empty">No transactions yet.</div></div>
+
+  <div class="card"><h2>Webhooks received from Paysawa</h2>
+    <div class="scroll"><table><thead><tr><th>When</th><th>Signature</th><th>What happened</th></tr></thead><tbody id="hooks"></tbody></table></div>
+    <div class="muted" id="nohooks">None yet. If your Paysawa app has no webhook URL (or Paysawa cannot reach this machine), updates still arrive by polling.</div></div>
+</div>
+<script>
+(function () {
+  "use strict";
+  function $(id) { return document.getElementById(id); }
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function clear(n) { while (n.firstChild) n.removeChild(n.firstChild); }
+  function money(n) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ") + " XAF"; }
+  function when(iso) { try { return new Date(iso).toLocaleString(undefined, { dateStyle: "short", timeStyle: "medium" }); } catch (e) { return iso; } }
+  async function api(method, path, body) {
+    var res = await fetch(path, { method: method, headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
+    var data = {}; try { data = await res.json(); } catch (e) {}
+    if (!res.ok) { var er = (data && data.error) || {}; throw new Error((er.code ? er.code + ": " : "") + (er.message || ("HTTP " + res.status))); }
+    return data;
+  }
+  function say(id, text, cls) { var m = $(id); m.textContent = text; m.className = "msg " + (cls || ""); }
+  function pill(status) { var cls = status === "SUCCESSFUL" ? "ok" : status === "FAILED" ? "bad" : "warn"; return el("span", "pill " + cls, status); }
+  function kv(box, k, v) { box.appendChild(el("span", "muted", k)); box.appendChild(el("span", "", v)); }
+  function safeHref(u) { try { var p = new URL(u); return p.protocol === "https:" || p.protocol === "http:" ? p.href : null; } catch (e) { return null; } }
+
+  async function loadStatus() {
+    var box = $("conn"); clear(box);
+    try {
+      var s = await api("GET", "/api/status");
+      kv(box, "Paysawa API", s.paysawa_base_url); kv(box, "App username", s.username || "(not set)");
+      kv(box, "Webhook URL to give Paysawa", s.webhook_url); kv(box, "Webhook key", s.has_webhook_key ? "configured" : "(not set)");
+      say("connmsg", s.configured ? (s.error ? "Cannot use Paysawa: " + s.error : "Connected.") : "Not configured: fill merchant_app/.env and restart.", s.error || !s.configured ? "bad" : "ok");
+      var bal = $("bal"); clear(bal);
+      if (s.balance) { bal.className = ""; bal.appendChild(el("div", "", money(s.balance.total_balance))); bal.appendChild(el("div", "muted", "held for pending withdrawals: " + money(s.balance.held_balance || 0))); }
+      else { bal.className = "muted"; bal.textContent = "unavailable"; }
+    } catch (e) { say("connmsg", e.message, "bad"); }
+  }
+  async function loadRows() {
+    try {
+      var t = (await api("GET", "/api/transactions")).data, body = $("rows"); clear(body);
+      $("empty").hidden = t.length > 0;
+      t.forEach(function (r) {
+        var tr = el("tr");
+        tr.appendChild(el("td", "", when(r.created_at))); tr.appendChild(el("td", "", r.kind.replace("_", " ")));
+        tr.appendChild(el("td", "", r.phone || "-")); tr.appendChild(el("td", "", money(r.amount)));
+        var st = el("td"); st.appendChild(pill(r.status)); tr.appendChild(st);
+        var d = el("td", "muted");
+        if (r.link) { var h = safeHref(r.link); if (h) { var a = el("a", "", "open pay link"); a.href = h; a.target = "_blank"; a.rel = "noopener"; d.appendChild(a); d.appendChild(document.createElement("br")); } }
+        if (r.status === "PENDING" && r.ussd_code) d.appendChild(el("div", "", "Approve on the phone (or dial " + r.ussd_code + ")"));
+        if (r.operator) d.appendChild(el("div", "", r.operator));
+        if (r.note) d.appendChild(el("div", "", r.note));
+        d.appendChild(el("div", "", "ref " + r.reference));
+        tr.appendChild(d); body.appendChild(tr);
+      });
+    } catch (e) { /* shown by the connection card */ }
+  }
+  async function loadHooks() {
+    try {
+      var h = (await api("GET", "/api/webhook-log")).data, body = $("hooks"); clear(body);
+      $("nohooks").hidden = h.length > 0;
+      h.forEach(function (x) {
+        var tr = el("tr"); tr.appendChild(el("td", "", when(x.time)));
+        var s = el("td"); s.appendChild(el("span", "pill " + (x.valid ? "ok" : "bad"), x.valid ? "VALID" : "INVALID")); tr.appendChild(s);
+        var d = el("td"); d.appendChild(el("div", "", x.summary)); d.appendChild(el("code", "", JSON.stringify(x.params))); tr.appendChild(d); body.appendChild(tr);
+      });
+    } catch (e) {}
+  }
+  function form(id, msgId, path, build, done) {
+    $(id).addEventListener("submit", async function (ev) {
+      ev.preventDefault(); say(msgId, "Working...", "muted");
+      var f = ev.target;
+      try { var out = await api("POST", path, build(f)); say(msgId, done(out), "ok"); loadRows(); loadStatus(); }
+      catch (e) { say(msgId, e.message, "bad"); }
+    });
+  }
+  form("f-deposit", "m-deposit", "/api/deposit", function (f) { return { phone: f.phone.value, amount: Number(f.amount.value), description: f.description.value }; },
+       function (o) { return "Request sent (" + o.status + "). " + (o.status === "PENDING" ? "Approve it on the phone." : ""); });
+  form("f-withdraw", "m-withdraw", "/api/withdraw", function (f) { return { phone: f.phone.value, amount: Number(f.amount.value), description: f.description.value }; },
+       function (o) { return "Withdrawal " + o.status + "."; });
+  form("f-link", "m-link", "/api/payment-link", function (f) { return { amount: Number(f.amount.value), description: f.description.value }; },
+       function (o) { return "Link created: " + o.link; });
+  $("reload").addEventListener("click", function () { loadStatus(); loadRows(); loadHooks(); });
+  loadStatus(); loadRows(); loadHooks();
+  setInterval(function () { loadRows(); loadHooks(); }, 3000);
+  setInterval(loadStatus, 15000);
+})();
+</script>
+</body>
+</html>

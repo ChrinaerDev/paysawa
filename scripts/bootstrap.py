@@ -32,6 +32,8 @@ async def main() -> None:
             raise SystemExit(f"Schema is missing tables {sorted(missing)}. Run schema.sql in Neon first.")
         if "checkout_sessions" not in tables:
             raise SystemExit("Run schema_002_checkout_sessions.sql in Neon first.")
+        if "apps" not in tables:
+            raise SystemExit("Run schema_003_apps.sql in Neon first.")
         result = await session.execute(text(SEED))
         await session.commit()
         print(f"Platform accounts: {result.rowcount} created (4 total expected).")

@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.errors import ApiError
 from app.models import Account, ApiKey, Merchant
-from app.security import generate_api_key, hash_password
+from app.security import hash_password, make_api_key
 
 
 async def create_merchant(session: AsyncSession, *, name: str, email: str, password: str, live_enabled: bool = False) -> Merchant:
@@ -39,9 +39,12 @@ async def create_merchant(session: AsyncSession, *, name: str, email: str, passw
     return merchant
 
 
-async def issue_api_key(session: AsyncSession, merchant: Merchant, mode: str, label: str | None) -> tuple[ApiKey, str]:
-    full, prefix, key_hash = generate_api_key(mode)
-    key = ApiKey(id=uuid.uuid4(), merchant_id=merchant.id, mode=mode, label=label, prefix=prefix, key_hash=key_hash)
+async def issue_api_key(session: AsyncSession, merchant: Merchant, mode: str, label: str | None, secret: str) -> tuple[ApiKey, str]:
+    if not secret:
+        raise ApiError(500, "not_configured", "Set API_KEY_SECRET (or JWT_SECRET) in .env before creating API keys.")
+    key_id = uuid.uuid4()
+    full, prefix, key_hash = make_api_key(mode, key_id, secret)
+    key = ApiKey(id=key_id, merchant_id=merchant.id, mode=mode, label=label, prefix=prefix, key_hash=key_hash)
     session.add(key)
     await session.commit()
     return key, full
