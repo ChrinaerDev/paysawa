@@ -15,7 +15,7 @@ from app.models import App, Merchant
 from app.services import apps as apps_service
 from app.services.serializers import iso
 
-router = APIRouter(tags=["apps (Campay-style credentials)"])
+router = APIRouter(tags=["Apps"])
 
 
 class AppIn(BaseModel):

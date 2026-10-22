@@ -362,14 +362,14 @@ def keys_screen(ctx: Ctx) -> None:
                 shown_keys.pop(keys[int(n) - 1]["id"], None)
 
 
-# ------------------------------------------------------------------ apps (Campay-style credentials)
+# ------------------------------------------------------------------ apps (app credentials)
 def apps_screen(ctx: Ctx) -> None:
     shown: dict[str, dict] = {}
     while True:
         ui.clear()
         apps = ctx.api.request("GET", "/me/apps")["data"]
-        ui.panel("An app gives you Campay-style credentials: an app username, an app password and a webhook key.\n"
-                 "Point any Campay-style client (or the demo server in merchant_app/) at the API base URL and it works like Campay:\n"
+        ui.panel("An app gives you credentials: an app username, an app password and a webhook key.\n"
+                 "Use them with the Paysawa SDK (or the demo server in merchant_app/) against the API base URL:\n"
                  "POST /token/, POST /collect/, POST /withdraw/, GET /transaction/{reference}/, GET /balance/, POST /get_payment_link/.",
                  title="Apps")
         if apps:

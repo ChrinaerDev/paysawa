@@ -14,6 +14,7 @@ from __future__ import annotations
 import hmac
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field
@@ -49,11 +50,15 @@ class CompatRoute(APIRoute):
                 return await original(request)
             except ApiError as exc:
                 return JSONResponse(status_code=exc.status_code, content={"message": exc.message, "code": exc.code})
+            except RequestValidationError as exc:  # missing/invalid fields: same flat shape as every other error here
+                first = exc.errors()[0] if exc.errors() else {}
+                where = ".".join(str(p) for p in first.get("loc", []) if p != "body")
+                return JSONResponse(status_code=422, content={"message": f"{where}: {first.get('msg', 'invalid value')}".strip(": "), "code": "invalid_request"})
 
         return handler
 
 
-router = APIRouter(prefix="/api", tags=["Campay-compatible API"], route_class=CompatRoute)
+router = APIRouter(prefix="/api", tags=["Apps API"], route_class=CompatRoute)
 
 
 class _Body(BaseModel):

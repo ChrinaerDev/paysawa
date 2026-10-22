@@ -277,3 +277,15 @@ with the app's webhook key over the same parameters. Verify it and compare the f
 **The demo merchant server** (`merchant_app/`, port 9000) is a complete example of a second server built on Paysawa: deposit, withdrawal, payment links,
 its own transaction list kept in step by webhooks AND polling, and a webhook log. Setup is in `merchant_app/README.md`.
 
+## 15. Documentation website, Markdown docs and the Python SDK
+
+- **Markdown docs:** `docs/` in English and `docs/fr/` in French (start at `docs/README.md`): overview, getting started, authentication, test and live, webhooks, hosted pay page, errors,
+  Python SDK, going live, FAQ, dashboard API, and one file per endpoint under `docs/api/`.
+- **Website:** `docs_site/index.html` (open it in a browser, or it is served by the API at `/developers/`). It looks like Campay's docs: a sidebar, one page
+  per endpoint with request examples in cURL / Python SDK / Python requests / JavaScript and response examples, search, an **EN/FR** switch (French by default for French browsers),
+  a light and dark theme (code samples follow it), a layout for phones, tablets and desktops, and an **API base URL** box in the top bar that rewrites every example. It is plain HTML, CSS and JavaScript, so it can also be hosted on GitHub Pages, Netlify or any static host.
+- **Edit and rebuild:** sources are `docs_src/pages/*.md` and `docs_src/pages_fr/*.md` (prose, English and French) and `docs_src/reference.py` with `docs_src/reference_fr.py` (endpoints; the build fails if a translation is missing). Put your real address in `docs_src/config.py` (`BASE_URL`),
+  then run `python docs_src/build.py` to regenerate `docs/` and `docs_site/assets/content.js`.
+- **Python SDK:** the `paysawa-python/` folder (a separate repository, published as `pip install paysawa`). `DEFAULT_BASE_URL` in `src/paysawa/client.py` and the
+  GitHub user in `pyproject.toml` must be set before publishing. Its release guide is in the SDK's README and in the project hand-over notes.
+

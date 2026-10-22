@@ -1,5 +1,5 @@
-"""Demo merchant server. Runs on its own port and talks to Paysawa ONLY through its Campay-style API
-with an app's username / password / webhook key, exactly like Paysawa talks to Campay."""
+"""Demo merchant server. Runs on its own port and talks to Paysawa ONLY through the apps API,
+with an app's username / password / webhook key."""
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -112,7 +112,7 @@ async def webhook_log(request: Request):
 
 @app.api_route("/webhooks/paysawa", methods=["GET", "POST"])
 async def paysawa_webhook(request: Request):
-    """Paysawa calls this (Campay-style: GET with query parameters and a signed `signature`)."""
+    """Paysawa calls this: a GET with query parameters and a signed `signature`."""
     params = dict(request.query_params)
     if request.method == "POST":
         try:

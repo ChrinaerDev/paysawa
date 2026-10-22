@@ -1,10 +1,12 @@
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 
 from app.api import apps, auth, compat, gate, internal, pages, v1, webhooks_in
@@ -81,5 +83,9 @@ app.include_router(apps.router)
 app.include_router(compat.router)
 app.include_router(gate.router)
 app.include_router(pages.router)
+
+_docs_dir = Path(__file__).resolve().parent.parent / "docs_site"
+if _docs_dir.is_dir():  # documentation website at /developers/
+    app.mount("/developers", StaticFiles(directory=str(_docs_dir), html=True), name="developers")
 app.include_router(webhooks_in.router)
 app.include_router(internal.router)

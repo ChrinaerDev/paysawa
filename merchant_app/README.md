@@ -1,7 +1,7 @@
 # Demo merchant app (second server, port 9000)
 
-A separate server that uses a **Paysawa app's credentials** (app username, app password, webhook key) the way Paysawa
-uses Campay's. It talks to Paysawa only through the Campay-style API (`/api/token/`, `/collect/`, `/withdraw/`,
+A separate server that uses a **Paysawa app's credentials** (app username, app password, webhook key).
+It talks to Paysawa only through the apps API (`/api/token/`, `/collect/`, `/withdraw/`,
 `/transaction/{reference}/`, `/balance/`, `/get_payment_link/`) and receives Paysawa's signed webhooks.
 
 ## Run it

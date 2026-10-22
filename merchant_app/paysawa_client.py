@@ -1,4 +1,4 @@
-"""Minimal Paysawa client for the Campay-style API. Standalone: only httpx and PyJWT.
+"""Minimal Paysawa client for the apps API. Standalone: only httpx and PyJWT.
 
     client = PaysawaClient(base_url="https://your-paysawa/api/", username="pa_...", password="...", webhook_key="whk_...")
     ref = await client.collect(5000, "670000001", "Order 1001", "order-1001")   # customer gets a prompt
